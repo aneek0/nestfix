@@ -42,6 +42,40 @@ pub enum Error {
     BlankClass,
 }
 
+/// Outcome of a window placement attempt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    /// The dispatcher moved the window.
+    Moved,
+    /// The window already sat on the target position, so Hyprland refused the
+    /// dispatch as a no-op.
+    Unchanged,
+    /// The window is filtered out of placement in the configured mode.
+    Filtered,
+}
+
+/// Hyprland answers some dispatches with a deliberate no-op instead of `ok`.
+/// The `hyprland` crate maps every non-`ok` reply to
+/// [`HyprError::NotOkDispatch`], so the reply text is the only way to tell such
+/// a no-op apart from a genuine failure.
+fn is_noop_dispatch(error: &HyprError) -> bool {
+    matches!(
+        error,
+        HyprError::NotOkDispatch(reason)
+            if reason.contains("didn't change") || reason.contains("Previous workspace doesn't exist")
+    )
+}
+
+/// Hyprland sends window addresses without a `0x` prefix and the `hyprland`
+/// crate adds one, but `Address::fmt_new` adds it unconditionally, which yields
+/// `0x0x...` for an already prefixed address. Addresses are therefore
+/// normalised to exactly one prefix before being used as map keys or dispatch
+/// arguments.
+fn normalize_address(address: Address) -> Address {
+    let raw = address.to_string();
+    Address::new(raw.trim_start_matches("0x"))
+}
+
 #[derive(Error, Debug)]
 pub enum ParseError {
     #[error("invalid format found")]
@@ -117,8 +151,8 @@ impl State {
         }
         state.clone()
     }
-
     pub async fn add_window(&self, class: String, address: Address) {
+        let address = normalize_address(address);
         {
             // Creates new program if none exists
             let mut programs = self.programs.0.lock().await;
@@ -134,7 +168,6 @@ impl State {
                         workspaces: positions,
                         floating_window: None,
                         moved: false,
-                        float_moved: false,
                     },
                 );
             }
@@ -154,6 +187,7 @@ impl State {
 
     // Removes mapping between window and program, it will never remove a programs state
     pub async fn remove_window(&self, address: Address) -> Result<(), Error> {
+        let address = normalize_address(address);
         let mut addresses = self.addresses.0.lock().await;
         if let Some(window) = addresses.remove(&address) {
             let diff = Utc::now() - window.timestamp;
@@ -162,10 +196,17 @@ impl State {
                 && ((is_in_list && self.restore_mode == FilterMode::Include)
                     || (!is_in_list && self.restore_mode == FilterMode::Exclude))
             {
-                Dispatch::call_async(DispatchType::Workspace(WorkspaceIdentifierWithSpecial::Id(
-                    window.origin,
-                )))
-                .await?;
+                match Dispatch::call_async(DispatchType::Workspace(
+                    WorkspaceIdentifierWithSpecial::Id(window.origin),
+                ))
+                .await
+                {
+                    Ok(()) => (),
+                    // The origin workspace is still the active one, so Hyprland
+                    // refuses the switch as a no-op.
+                    Err(err) if is_noop_dispatch(&err) => (),
+                    Err(err) => return Err(Error::HyprError(err)),
+                }
             }
             debug!(
                 "Window {address} of type {} removed after {}s",
@@ -177,6 +218,7 @@ impl State {
     }
 
     pub async fn window_moved(&self, address: Address, workspace_id: i32) -> Result<(), Error> {
+        let address = normalize_address(address);
         let addresses = self.addresses.0.lock().await;
         let window = match addresses.get(&address) {
             Some(val) => val,
@@ -219,11 +261,16 @@ impl State {
         Ok(())
     }
 
-    pub async fn move_window(&self, address: &Address, workspace_id: i32) -> Result<bool, Error> {
+    pub async fn move_window(
+        &self,
+        address: &Address,
+        workspace_id: i32,
+    ) -> Result<Placement, Error> {
+        let address = normalize_address(address.clone());
         let addresses = self.addresses.0.lock().await;
         let mut programs = self.programs.0.lock().await;
 
-        let window = match addresses.get(address) {
+        let window = match addresses.get(&address) {
             Some(val) => val,
             None => return Err(Error::BlankAddress),
         };
@@ -232,7 +279,7 @@ impl State {
         if (!is_in_list && self.workspace_mode == FilterMode::Include)
             || (is_in_list && self.workspace_mode == FilterMode::Exclude)
         {
-            return Ok(false);
+            return Ok(Placement::Filtered);
         }
 
         let program = match programs.get_mut(&window.class) {
@@ -240,6 +287,8 @@ impl State {
             None => return Err(Error::BlankClass),
         };
 
+        // Suppresses the `window_moved` event this dispatch triggers, so nest
+        // does not learn from its own moves.
         program.moved = true;
 
         match Dispatch::call_async(DispatchType::MoveToWorkspace(
@@ -248,11 +297,14 @@ impl State {
         ))
         .await
         {
-            Ok(_) => Ok(true),
-            Err(_) => {
-                // We failed to move the window (this does not mean an error the window could be in the right position already)
+            Ok(()) => Ok(Placement::Moved),
+            Err(err) if is_noop_dispatch(&err) => {
                 program.moved = false;
-                Ok(false)
+                Ok(Placement::Unchanged)
+            }
+            Err(err) => {
+                program.moved = false;
+                Err(Error::HyprError(err))
             }
         }
     }
@@ -300,11 +352,11 @@ impl State {
         address: &Address,
         at: (i16, i16),
         size: (i16, i16),
-    ) -> Result<bool, Error> {
+    ) -> Result<Placement, Error> {
+        let address = normalize_address(address.clone());
         let addresses = self.addresses.0.lock().await;
-        let mut programs = self.programs.0.lock().await;
 
-        let window = match addresses.get(address) {
+        let window = match addresses.get(&address) {
             Some(val) => val,
             None => return Err(Error::BlankAddress),
         };
@@ -313,53 +365,37 @@ impl State {
         if (!is_in_list && self.floating_mode == FilterMode::Include)
             || (is_in_list && self.floating_mode == FilterMode::Exclude)
         {
-            return Ok(false);
+            return Ok(Placement::Filtered);
         }
 
-        let program = match programs.get_mut(&window.class) {
-            Some(val) => val,
-            None => return Err(Error::BlankClass),
-        };
-
-        program.float_moved = true;
-
-        match Dispatch::call_async(DispatchType::ToggleFloating(Some(
-            WindowIdentifier::Address(address.clone()),
-        )))
-        .await
         {
-            Ok(_) => (),
-            Err(_) => {
-                program.float_moved = false;
-                return Ok(false);
+            let programs = self.programs.0.lock().await;
+            if !programs.contains_key(&window.class) {
+                return Err(Error::BlankClass);
             }
         }
 
-        match Dispatch::call_async(DispatchType::MoveWindowPixel(
-            hyprland::dispatch::Position::Exact(at.0, at.1),
-            WindowIdentifier::Address(address.clone()),
-        ))
-        .await
-        {
-            Ok(_) => (),
-            Err(_) => {
-                program.float_moved = false;
-                return Ok(false);
-            }
-        }
+        // `togglefloating` flips the floating state, so applying it to a window
+        // that is already floating tiles it again. The idempotent `setfloating`
+        // dispatcher is used instead; the crate has no variant for it yet.
+        let identifier = format!("address:{address}");
+        Dispatch::call_async(DispatchType::Custom("setfloating", &identifier)).await?;
 
-        match Dispatch::call_async(DispatchType::ResizeWindowPixel(
+        // Resize first: `resizewindowpixel` keeps the window centre fixed, so a
+        // resize after the move would shift the window away from `at`.
+        Dispatch::call_async(DispatchType::ResizeWindowPixel(
             hyprland::dispatch::Position::Exact(size.0, size.1),
             WindowIdentifier::Address(address.clone()),
         ))
-        .await
-        {
-            Ok(_) => Ok(true),
-            Err(_) => {
-                program.float_moved = false;
-                Ok(false)
-            }
-        }
+        .await?;
+
+        Dispatch::call_async(DispatchType::MoveWindowPixel(
+            hyprland::dispatch::Position::Exact(at.0, at.1),
+            WindowIdentifier::Address(address.clone()),
+        ))
+        .await?;
+
+        Ok(Placement::Moved)
     }
 
     pub async fn get_program(&self, class: String) -> Option<Program> {

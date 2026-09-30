@@ -8,7 +8,6 @@ pub struct Program {
     pub workspaces: Vec<Workspace>,
     pub floating_window: Option<FloatingWindow>,
     pub moved: bool,
-    pub float_moved: bool,
 }
 
 impl Display for Program {
@@ -58,7 +57,6 @@ impl FromStr for Program {
             workspaces,
             floating_window,
             moved: false,
-            float_moved: false,
         })
     }
 }

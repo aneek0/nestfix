@@ -18,7 +18,7 @@ use tokio::time::sleep;
 use crate::{
     config::Config,
     logger::setup_logger,
-    state::{FloatingWindow, State, Workspace},
+    state::{FloatingWindow, Placement, State, Workspace},
     storage::Storage,
 };
 mod config;
@@ -118,16 +118,14 @@ async fn main() -> Result<(), Error> {
             };
 
             match state.move_window(&event.window_address, workspace_id).await {
-                Ok(moved) => {
-                    if moved {
-                        info!("Moved window {} to {}", event.window_address, workspace_id)
-                    } else {
-                        info!(
-                            "Tried to move window {} to {} but a move could not be completed",
-                            event.window_address, workspace_id
-                        )
-                    }
+                Ok(Placement::Moved) => {
+                    info!("Moved window {} to {}", event.window_address, workspace_id)
                 }
+                Ok(Placement::Unchanged) => debug!(
+                    "Window {} was already on workspace {}",
+                    event.window_address, workspace_id
+                ),
+                Ok(Placement::Filtered) => (),
                 Err(err) => error!("Failed to dispatch window move: {err}"),
             };
 
@@ -140,20 +138,12 @@ async fn main() -> Result<(), Error> {
                 .move_float_window(&event.window_address, window.at, window.size)
                 .await
             {
-                Ok(moved) => {
-                    if moved {
-                        info!(
-                            "Moved floating window {} to {:?} and resized to {:?}",
-                            event.window_address, window.at, window.size
-                        )
-                    } else {
-                        info!(
-                            "Tried to moved floating window {} to {:?} and resized to {:?}",
-                            event.window_address, window.at, window.size
-                        )
-                    }
-                }
-                Err(err) => error!("Failed to dispatch window move: {err}"),
+                Ok(Placement::Moved) => info!(
+                    "Restored floating window {} to {:?} and resized to {:?}",
+                    event.window_address, window.at, window.size
+                ),
+                Ok(Placement::Unchanged | Placement::Filtered) => (),
+                Err(err) => error!("Failed to restore floating window: {err}"),
             };
         })
     });
