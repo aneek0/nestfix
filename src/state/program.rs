@@ -1,13 +1,25 @@
 use std::{fmt::Display, str::FromStr};
 
-use crate::state::{FloatingWindow, ParseError, Workspace};
+use crate::state::{Address, FloatingWindow, ParseError, Workspace};
+
+/// A move nest dispatched that Hyprland has not reported back yet.
+#[derive(Clone, Debug)]
+pub struct PendingMove {
+    pub address: Address,
+    pub workspace_id: i32,
+}
 
 #[derive(Clone, Debug)]
 pub struct Program {
     pub class: String,
     pub workspaces: Vec<Workspace>,
     pub floating_window: Option<FloatingWindow>,
-    pub moved: bool,
+    /// Moves nest dispatched that are still awaiting their `movewindow` event.
+    /// Matching by address is what keeps nest from learning its own moves: a
+    /// single boolean cannot, because Hyprland sends no event for a dispatch
+    /// that targets the workspace the window already sits on, and the stuck
+    /// flag would then swallow the next genuine move.
+    pub pending_moves: Vec<PendingMove>,
 }
 
 impl Display for Program {
@@ -56,7 +68,7 @@ impl FromStr for Program {
             class: class.to_string(),
             workspaces,
             floating_window,
-            moved: false,
+            pending_moves: Vec::new(),
         })
     }
 }

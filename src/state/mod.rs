@@ -21,7 +21,7 @@ mod safemap;
 pub use safemap::SafeMap;
 
 mod program;
-pub use program::Program;
+pub use program::{PendingMove, Program};
 
 mod window;
 pub use window::Window;
@@ -75,6 +75,10 @@ fn normalize_address(address: Address) -> Address {
     let raw = address.to_string();
     Address::new(raw.trim_start_matches("0x"))
 }
+
+/// Nest remembers the moves it dispatches until their `movewindow` event
+/// arrives; the list stays bounded by the number of windows nest places.
+const PENDING_MOVE_LIMIT: usize = 8;
 
 #[derive(Error, Debug)]
 pub enum ParseError {
@@ -167,7 +171,7 @@ impl State {
                         class: class.clone(),
                         workspaces: positions,
                         floating_window: None,
-                        moved: false,
+                        pending_moves: Vec::new(),
                     },
                 );
             }
@@ -208,6 +212,11 @@ impl State {
                     Err(err) => return Err(Error::HyprError(err)),
                 }
             }
+            // A window that is gone will never report its move back.
+            let mut programs = self.programs.0.lock().await;
+            if let Some(program) = programs.get_mut(&window.class) {
+                program.pending_moves.retain(|p| p.address != address);
+            }
             debug!(
                 "Window {address} of type {} removed after {}s",
                 window.class,
@@ -234,11 +243,35 @@ impl State {
                 return Err(Error::BlankClass);
             }
         };
-
-        // This is true if the program moved a window
-        if program.moved {
+        // Nest ignores the moves it dispatched itself, matched by address: a
+        // boolean flag cannot do this, because a dispatch onto the workspace a
+        // window already occupies emits no event at all on Hyprland 0.56 and
+        // would leave the flag set for the next, genuine move.
+        if let Some(index) = program
+            .pending_moves
+            .iter()
+            .position(|pending| pending.address == address)
+        {
+            let pending = program.pending_moves.remove(index);
             debug!("Internal move, ignoring results");
-            program.moved = false;
+            // The move landed somewhere else than requested, so it was a
+            // genuine user move and nest learns from it.
+            if pending.workspace_id == workspace_id {
+                return Ok(());
+            }
+            let position = Workspace {
+                workspace_id,
+                timestamp: Utc::now().timestamp(),
+            };
+            program.workspaces.push(position);
+            while program.workspaces.len() > self.workspace_buffer {
+                program.workspaces.remove(0);
+            }
+            self.changed.store(true, Ordering::Relaxed);
+            info!(
+                "Program of type {} got moved to workspace {}",
+                window.class, workspace_id
+            );
             return Ok(());
         }
 
@@ -287,9 +320,15 @@ impl State {
             None => return Err(Error::BlankClass),
         };
 
-        // Suppresses the `window_moved` event this dispatch triggers, so nest
-        // does not learn from its own moves.
-        program.moved = true;
+        // Records the intent so the `movewindow` event this dispatch may
+        // trigger is recognised as nest's own work rather than a user move.
+        program.pending_moves.push(PendingMove {
+            address: address.clone(),
+            workspace_id,
+        });
+        if program.pending_moves.len() > PENDING_MOVE_LIMIT {
+            program.pending_moves.remove(0);
+        }
 
         match Dispatch::call_async(DispatchType::MoveToWorkspace(
             WorkspaceIdentifierWithSpecial::Id(workspace_id),
@@ -298,12 +337,16 @@ impl State {
         .await
         {
             Ok(()) => Ok(Placement::Moved),
+            // Hyprland refuses a dispatch that targets the workspace the window
+            // already occupies, and on 0.56 it does so silently for a window
+            // that is alone on that workspace: no event follows, so the record
+            // is dropped here rather than left to be matched by a later move.
             Err(err) if is_noop_dispatch(&err) => {
-                program.moved = false;
+                program.pending_moves.retain(|p| p.address != address);
                 Ok(Placement::Unchanged)
             }
             Err(err) => {
-                program.moved = false;
+                program.pending_moves.retain(|p| p.address != address);
                 Err(Error::HyprError(err))
             }
         }
