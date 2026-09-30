@@ -1,13 +1,14 @@
 [package]
-version = "0.0.7"
-name = "hypr-nest"
-description = "An automatic window switcher for Hyprland"
+name = "nestfix"
+version = "0.0.8"
+description = "An automatic window switcher for Hyprland (fork of hypr-nest)"
 edition = "2024"
-authors = ["Vincent Brodin <vincent.brodin21@gmail.com>"]
+authors = ["aneek0 <matraskotey@gmail.com>"]
 license = "MIT"
-repository = "https://github.com/vincbro/nest"
+repository = "https://github.com/aneek0/nestfix"
 readme = "README.md"
 keywords = ["hyprland", "tool", "utility"]
+categories = ["command-line-utilities"]
 
 [[bin]]
 name = "nest"

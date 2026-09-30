@@ -4,7 +4,6 @@ use std::{
     str::FromStr,
 };
 
-use log::error;
 use thiserror::Error;
 
 use crate::state::{ParseError, Program};

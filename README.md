@@ -6,6 +6,8 @@ nest is an intelligent window placement system for [Hyprland](https://github.com
 It learns where you like your apps to live and ensures they always open in the right workspace, no hunting, no dragging, no friction.
 Think of it like [zoxide](https://github.com/ajeetdsouza/zoxide), but for your windows.
 
+Fork of [vincbro/nest](https://github.com/vincbro/nest) with fixes for placement and floating restore on Hyprland 0.54+. Published as `nestfix` because the upstream crate name is taken.
+
 
 ## Quick Demo
 
@@ -38,14 +40,14 @@ If you have feedback, open an issue or start a discussion - your input directly 
 
 ### Cargo
 ```bash
-cargo install hypr-nest
+cargo install nestfix
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/vincbro/nest.git 
-cd nest
+git clone https://github.com/aneek0/nestfix.git
+cd nestfix
 cargo build --release
 ```
 
@@ -60,7 +62,7 @@ exec-once = nest
 
 ### From Source
 ```conf
-exec-once = /PATH/TO/nest/target/release/nest
+exec-once = /PATH/TO/nestfix/target/release/nest
 ```
 
 On first run, nest will create a config directory at `~/.config/nest/` with the following files:
