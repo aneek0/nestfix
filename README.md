@@ -10,6 +10,10 @@ Fork of [vincbro/nest](https://github.com/vincbro/nest) with fixes for placement
 
 ### Changelog
 
+**0.1.2**
+
+- Dispatches are sent in the syntax the running Hyprland understands. Hyprland 0.56 executes every dispatch as Lua when it is configured with a Lua config, where the legacy `name arg` form is a syntax error (`')' expected near '7'`), so nest now detects the active config provider and renders the equivalent `hl.dsp` call.
+
 **0.1.1**
 
 - The dispatch error reason is no longer swallowed: `hyprland error` now prints the underlying Hyprland reply.

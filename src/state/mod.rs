@@ -1,8 +1,10 @@
-use crate::config::{Config, FilterMode};
+use crate::{
+    config::{Config, FilterMode},
+    dispatch::{Ipc, Request},
+};
 use chrono::Utc;
 use hyprland::{
     data::{Clients, FullscreenMode},
-    dispatch::{Dispatch, DispatchType, WindowIdentifier, WorkspaceIdentifierWithSpecial},
     error::HyprError,
     shared::{Address, HyprData},
 };
@@ -107,6 +109,7 @@ pub struct State {
     restore_mode: FilterMode,
     restore_timeout: i64,
     pub changed: Arc<AtomicBool>,
+    ipc: Ipc,
 }
 
 pub type WorkspaceConfig = (Arc<[String]>, FilterMode, usize);
@@ -118,6 +121,7 @@ impl State {
         workspace_config: WorkspaceConfig,
         floating_config: FloatingConfig,
         restore_config: RestoreConfig,
+        ipc: Ipc,
     ) -> Self {
         Self {
             addresses: SafeMap::new(),
@@ -132,10 +136,14 @@ impl State {
             restore_timeout: restore_config.2,
             current_workspace: Arc::new(AtomicI32::new(1)),
             changed: Arc::new(AtomicBool::new(false)),
+            ipc,
         }
     }
 
-    pub async fn load(programs: Vec<Program>, config: Config) -> Self {
+    pub async fn load(
+        programs: Vec<Program>,
+        config: Config,
+    ) -> Result<Self, crate::dispatch::Error> {
         let state = Self::new(
             (
                 config.workspace.filter.programs.into(),
@@ -151,12 +159,13 @@ impl State {
                 config.restore.filter.mode,
                 config.restore.timeout,
             ),
+            Ipc::connect()?,
         );
         let mut programs_map = state.programs.0.lock().await;
         for program in programs {
             programs_map.insert(program.class.clone(), program);
         }
-        state.clone()
+        Ok(state.clone())
     }
     pub async fn add_window(&self, class: String, address: Address) {
         let address = normalize_address(address);
@@ -203,11 +212,9 @@ impl State {
                 && ((is_in_list && self.restore_mode == FilterMode::Include)
                     || (!is_in_list && self.restore_mode == FilterMode::Exclude))
             {
-                match Dispatch::call_async(DispatchType::Workspace(
-                    WorkspaceIdentifierWithSpecial::Id(window.origin),
-                ))
-                .await
-                {
+                match self.ipc.dispatch(&Request::FocusWorkspace {
+                    workspace: window.origin,
+                }) {
                     Ok(()) => (),
                     // The origin workspace is still the active one, so Hyprland
                     // refuses the switch as a no-op.
@@ -333,12 +340,10 @@ impl State {
             program.pending_moves.remove(0);
         }
 
-        match Dispatch::call_async(DispatchType::MoveToWorkspace(
-            WorkspaceIdentifierWithSpecial::Id(workspace_id),
-            Some(WindowIdentifier::Address(address.clone())),
-        ))
-        .await
-        {
+        match self.ipc.dispatch(&Request::MoveToWorkspace {
+            window: &address,
+            workspace: workspace_id,
+        }) {
             Ok(()) => Ok(Placement::Moved),
             // Hyprland refuses a dispatch that targets the workspace the window
             // already occupies, and on 0.56 it does so silently for a window
@@ -436,23 +441,21 @@ impl State {
 
         // `togglefloating` flips the floating state, so applying it to a window
         // that is already floating tiles it again. The idempotent `setfloating`
-        // dispatcher is used instead; the crate has no variant for it yet.
-        let identifier = format!("address:{address}");
-        Dispatch::call_async(DispatchType::Custom("setfloating", &identifier)).await?;
+        // dispatcher is used instead.
+        self.ipc
+            .dispatch(&Request::SetFloating { window: &address })?;
 
         // Resize first: `resizewindowpixel` keeps the window centre fixed, so a
         // resize after the move would shift the window away from `at`.
-        Dispatch::call_async(DispatchType::ResizeWindowPixel(
-            hyprland::dispatch::Position::Exact(size.0, size.1),
-            WindowIdentifier::Address(address.clone()),
-        ))
-        .await?;
+        self.ipc.dispatch(&Request::Resize {
+            window: &address,
+            size,
+        })?;
 
-        Dispatch::call_async(DispatchType::MoveWindowPixel(
-            hyprland::dispatch::Position::Exact(at.0, at.1),
-            WindowIdentifier::Address(address.clone()),
-        ))
-        .await?;
+        self.ipc.dispatch(&Request::Move {
+            window: &address,
+            at,
+        })?;
 
         Ok(Placement::Moved)
     }

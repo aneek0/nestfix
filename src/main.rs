@@ -17,11 +17,13 @@ use tokio::time::sleep;
 
 use crate::{
     config::Config,
+    dispatch::Error as DispatchError,
     logger::setup_logger,
     state::{FloatingWindow, Placement, State, Workspace},
     storage::Storage,
 };
 mod config;
+mod dispatch;
 mod logger;
 mod state;
 mod storage;
@@ -35,6 +37,8 @@ const LOG_FILE_NAME: &str = "output.txt";
 enum Error {
     #[error("hyprland error: {0}")]
     HyprError(#[from] HyprError),
+    #[error("hyprland dispatch error: {0}")]
+    Dispatch(#[from] DispatchError),
     #[error("io error")]
     IO(#[from] std::io::Error),
     #[error("storage error")]
@@ -85,7 +89,7 @@ async fn main() -> Result<(), Error> {
             return Err(Error::Storage(err));
         }
     };
-    let state = State::load(storage_value, config.clone()).await;
+    let state = State::load(storage_value, config.clone()).await?;
 
     let mut event_listener = AsyncEventListener::new();
 
