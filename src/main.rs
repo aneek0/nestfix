@@ -6,7 +6,7 @@ use hyprland::{
         Color,
         notify::{self, Icon},
     },
-    data::Clients,
+    data::{Clients, FullscreenMode},
     error::HyprError,
     event_listener::AsyncEventListener,
     shared::HyprData,
@@ -33,7 +33,7 @@ const LOG_FILE_NAME: &str = "output.txt";
 
 #[derive(Error, Debug)]
 enum Error {
-    #[error("hyprland error")]
+    #[error("hyprland error: {0}")]
     HyprError(#[from] HyprError),
     #[error("io error")]
     IO(#[from] std::io::Error),
@@ -192,6 +192,15 @@ async fn main() -> Result<(), Error> {
                     Some(val) => val,
                     None => continue,
                 };
+
+                // A window in a fullscreen mode reports the geometry of that
+                // mode, which is not the size or position the user chose for
+                // it. Tracking it here would overwrite the remembered
+                // rectangle with the fullscreen one, so the window is left
+                // alone until it returns to its normal state.
+                if client.fullscreen != FullscreenMode::None {
+                    continue;
+                }
 
                 if client.floating {
                     match state

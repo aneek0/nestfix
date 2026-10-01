@@ -8,6 +8,18 @@ Think of it like [zoxide](https://github.com/ajeetdsouza/zoxide), but for your w
 
 Fork of [vincbro/nest](https://github.com/vincbro/nest) with fixes for placement and floating restore on Hyprland 0.54+. Published as `nestfix` because the upstream crate name is taken.
 
+### Changelog
+
+**0.1.1**
+
+- The dispatch error reason is no longer swallowed: `hyprland error` now prints the underlying Hyprland reply.
+- A window in a fullscreen or maximized mode keeps that mode. Hyprland rejects the geometry dispatchers for such a window, and its layout owns the size and position until the mode is left, so nest no longer tries to force the remembered rectangle onto it.
+- The floating tracker no longer records the fullscreen rectangle over the geometry the user chose.
+
+**0.1.0**
+
+- Placement and floating restore for Hyprland 0.54+ (fork of `vincbro/nest`).
+
 
 ## Quick Demo
 

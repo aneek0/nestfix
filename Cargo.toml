@@ -1,6 +1,6 @@
 [package]
 name = "nestfix"
-version = "0.1.0"
+version = "0.1.1"
 description = "An automatic window switcher for Hyprland (fork of hypr-nest)"
 edition = "2024"
 authors = ["aneek0 <matraskotey@gmail.com>"]

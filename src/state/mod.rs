@@ -1,9 +1,10 @@
 use crate::config::{Config, FilterMode};
 use chrono::Utc;
 use hyprland::{
+    data::{Clients, FullscreenMode},
     dispatch::{Dispatch, DispatchType, WindowIdentifier, WorkspaceIdentifierWithSpecial},
     error::HyprError,
-    shared::Address,
+    shared::{Address, HyprData},
 };
 use log::{debug, info};
 use std::{
@@ -34,7 +35,7 @@ pub use floatingwindow::FloatingWindow;
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("hyprland error")]
+    #[error("hyprland error: {0}")]
     HyprError(#[from] HyprError),
     #[error("address not mapped to a class")]
     BlankAddress,
@@ -47,8 +48,10 @@ pub enum Error {
 pub enum Placement {
     /// The dispatcher moved the window.
     Moved,
-    /// The window already sat on the target position, so Hyprland refused the
-    /// dispatch as a no-op.
+    /// The placement was skipped because the window is in a fullscreen mode
+    /// (maximized or fullscreen). Hyprland refuses to move or resize such a
+    /// window, and its layout owns the geometry until the mode is left, so the
+    /// remembered placement is deliberately not applied.
     Unchanged,
     /// The window is filtered out of placement in the configured mode.
     Filtered,
@@ -418,6 +421,19 @@ impl State {
             }
         }
 
+        // Hyprland 0.54 and newer refuse `resizewindowpixel`/`movewindowpixel`
+        // for a window in any fullscreen mode (maximized included) with
+        // "Window is fullscreen", and the layout owns the geometry anyway. A
+        // client that asked to be maximized therefore keeps its mode instead of
+        // being forced back into the remembered rectangle.
+        if self.is_window_fullscreen(&address).await? {
+            debug!(
+                "Window {address} is fullscreen; keeping its geometry instead of restoring {:?} at {:?}",
+                size, at
+            );
+            return Ok(Placement::Unchanged);
+        }
+
         // `togglefloating` flips the floating state, so applying it to a window
         // that is already floating tiles it again. The idempotent `setfloating`
         // dispatcher is used instead; the crate has no variant for it yet.
@@ -439,6 +455,17 @@ impl State {
         .await?;
 
         Ok(Placement::Moved)
+    }
+
+    /// Reports whether Hyprland has the window in a fullscreen mode other than
+    /// `None`: maximized, fullscreen, or both. The dispatchers that apply
+    /// nest's remembered geometry refuse to act on such a window.
+    async fn is_window_fullscreen(&self, address: &Address) -> Result<bool, Error> {
+        let clients = Clients::get_async().await?;
+        Ok(clients.iter().any(|client| {
+            normalize_address(client.address.clone()) == *address
+                && client.fullscreen != FullscreenMode::None
+        }))
     }
 
     pub async fn get_program(&self, class: String) -> Option<Program> {
